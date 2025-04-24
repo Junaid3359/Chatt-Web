@@ -7,15 +7,29 @@ version: 1.0.0+1
 environment:
   sdk: '>=3.6.0 <4.0.0'
 
+# dependencies:
+#   flutter:
+#     sdk: flutter
+#   cupertino_icons: ^1.0.8
+#   intl: ^0.18.1
+#   firebase_core:
+#   firebase_auth:
+#   cloud_firestore:
+#   firebase_messaging:
+#   image_picker: 
+#   geolocator: 
+
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.8
-  intl: ^0.18.1
-  firebase_core:
-  firebase_auth:
-  cloud_firestore:
+  firebase_core: 
+  firebase_auth: 
+  cloud_firestore: 
+  firebase_storage: 
   firebase_messaging:
+  image_picker: 
+  geolocator: 
+  permission_handler: 
 
   # Optional (for improved UI)
   flutter_local_notifications: 

@@ -3,6 +3,10 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:geolocator/geolocator.dart';
+
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -190,6 +194,56 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
   final user = FirebaseAuth.instance.currentUser;
+  final ImagePicker _picker = ImagePicker();
+
+  Future<void> _sendImage() async {
+    final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+
+    if (image != null) {
+      // In a real application, you would upload this image to Firebase Storage
+      // and then send a message containing the download URL.
+      print('Image selected: ${image.path}');
+      await FirebaseFirestore.instance.collection('chats').add({
+        'type': 'image', // Indicate the message type
+        'imageUrl': 'URL_OF_UPLOADED_IMAGE', // Replace with the actual URL
+        'senderId': user!.uid,
+        'receiverId': widget.receiverId,
+        'timestamp': Timestamp.now(),
+      });
+    }
+  }
+
+  Future<void> _sendLocation() async {
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Location permissions are denied')));
+        return;
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Location permissions are permanently denied, we cannot request permissions.')));
+      return;
+    }
+
+    try {
+      Position position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high);
+      print('Latitude: ${position.latitude}, Longitude: ${position.longitude}');
+      await FirebaseFirestore.instance.collection('chats').add({
+        'type': 'location', // Indicate the message type
+        'latitude': position.latitude,
+        'longitude': position.longitude,
+        'senderId': user!.uid,
+        'receiverId': widget.receiverId,
+        'timestamp': Timestamp.now(),
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error getting location: $e')));
+    }
+  }
 
   void _sendMessage() async {
     final text = _controller.text.trim();
@@ -213,44 +267,98 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Column(
         children: [
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('chats')
-                  .orderBy('timestamp', descending: true)
-                  .where('senderId', whereIn: [user!.uid, widget.receiverId])
-                  .snapshots(),
-              builder: (ctx, snap) {
-                if (!snap.hasData) return Center(child: CircularProgressIndicator());
-                final msgs = snap.data!.docs.where((doc) =>
-                    (doc['senderId'] == user!.uid && doc['receiverId'] == widget.receiverId) ||
-                    (doc['senderId'] == widget.receiverId && doc['receiverId'] == user!.uid)).toList();
-                return ListView.builder(
-                  reverse: true,
-                  itemCount: msgs.length,
-                  itemBuilder: (ctx, i) {
-                    final m = msgs[i];
-                    final isMe = m['senderId'] == user!.uid;
-                    return Align(
-                      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                      child: Container(
-                        margin: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: isMe ? Colors.teal.shade200 : Colors.grey.shade300,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(m['text']),
+  child: StreamBuilder<QuerySnapshot>(
+    stream: FirebaseFirestore.instance
+        .collection('chats')
+        .orderBy('timestamp', descending: true)
+        .where('senderId', whereIn: [user!.uid, widget.receiverId])
+        .snapshots(),
+    builder: (ctx, snap) {
+      if (!snap.hasData) return Center(child: CircularProgressIndicator());
+      final msgs = snap.data!.docs.where((doc) =>
+          (doc['senderId'] == user!.uid && doc['receiverId'] == widget.receiverId) ||
+          (doc['senderId'] == widget.receiverId && doc['receiverId'] == user!.uid)).toList();
+      return ListView.builder(
+        reverse: true,
+        itemCount: msgs.length,
+        itemBuilder: (ctx, i) {
+          final m = msgs[i];
+          final isMe = m['senderId'] == user!.uid;
+          Widget messageContent;
+
+          final messageData = m.data() as Map<String, dynamic>?; // Cast to Map or null
+
+          if (messageData != null && messageData.containsKey('type') && messageData['type'] == 'image' && messageData.containsKey('imageUrl')) {
+            messageContent = SizedBox(
+              width: 200, // Adjust as needed
+              height: 200, // Adjust as needed
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.network(
+                  messageData['imageUrl'],
+                  fit: BoxFit.cover,
+                  loadingBuilder: (context, child, loadingProgress) {
+                    if (loadingProgress == null) return child;
+                    return Center(
+                      child: CircularProgressIndicator(
+                        value: loadingProgress.expectedTotalBytes != null
+                            ? loadingProgress.cumulativeBytesLoaded /
+                                loadingProgress.expectedTotalBytes!
+                            : null,
                       ),
                     );
                   },
-                );
-              },
+                  errorBuilder: (context, error, stackTrace) {
+                    return Center(child: Text('Failed to load image'));
+                  },
+                ),
+              ),
+            );
+          } else if (messageData != null && messageData.containsKey('type') && messageData['type'] == 'location' && messageData.containsKey('latitude') &&
+              messageData.containsKey('longitude')) {
+            messageContent = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('[Location Sent:]', style: TextStyle(fontWeight: FontWeight.bold)),
+                Text('Latitude: ${messageData['latitude']?.toStringAsFixed(6)}'),
+                Text('Longitude: ${messageData['longitude']?.toStringAsFixed(6)}'),
+                // You could add a map preview here using a package like google_maps_flutter
+                // For a simple text-based solution, the above is sufficient.
+              ],
+            );
+          } else {
+            messageContent = Text(m['text'] as String? ?? ''); // Handle potential null text
+          }
+
+          return Align(
+            alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+            child: Container(
+              margin: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: isMe ? Colors.teal.shade200 : Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: messageContent,
             ),
-          ),
+          );
+        },
+      );
+    },
+  ),
+),
           Padding(
             padding: const EdgeInsets.all(8),
             child: Row(
               children: [
+                IconButton(
+                  icon: Icon(Icons.image, color: Colors.teal),
+                  onPressed: _sendImage,
+                ),
+                IconButton(
+                  icon: Icon(Icons.location_on, color: Colors.teal),
+                  onPressed: _sendLocation,
+                ),
                 Expanded(
                   child: TextField(
                     controller: _controller,
@@ -272,3 +380,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 }
+
+
+
